@@ -16,31 +16,46 @@ jobs:
       - name: Prepare PowerShellGet v2 and PSGallery
         shell: powershell
         run: |
+          $ProgressPreference = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
-            Install-PackageProvider -Name NuGet -Force
+          if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -Force -Scope CurrentUser
           }
-          $repo = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
-          if (-not $repo) {
-            Register-PSRepository -Name PSGallery -SourceLocation 'https://www.powershellgallery.com/api/v2' -InstallationPolicy Trusted
-          } else {
-            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          }
-          # Use PowerShellGet v2 for Install-Module semantics
+          try { Get-PSRepository -Name PSGallery -ErrorAction Stop | Out-Null }
+          catch { Register-PSRepository -Default }
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           Install-Module -Name PowerShellGet -RequiredVersion 2.2.5 -Scope CurrentUser -Force
           Import-Module PowerShellGet -MinimumVersion 2.2.5 -Force
 
       - name: Install ps2exe
+        id: install_ps2exe
+        continue-on-error: true
         shell: powershell
         run: |
           Install-Module -Name ps2exe -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
           Import-Module ps2exe -Force
           Get-Module ps2exe | Format-List Name,Version,Path
 
-      - name: Convert bootstrap.ps1 -> bootstrap.exe
+      - name: Convert with ps2exe module
+        if: ${{ steps.install_ps2exe.outcome == 'success' }}
         shell: powershell
         run: |
           Invoke-PS2EXE -InputFile .\bootstrap.ps1 -OutputFile .\bootstrap.exe
+
+      - name: Fallback conversion without module
+        if: ${{ steps.install_ps2exe.outcome == 'failure' }}
+        shell: powershell
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $url = 'https://raw.githubusercontent.com/MScholtes/PS2EXE/master/ps2exe.ps1'
+          Invoke-WebRequest -Uri $url -OutFile ps2exe.ps1
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\ps2exe.ps1 -inputFile .\bootstrap.ps1 -outputFile .\bootstrap.exe
+
+      - name: Verify artifact
+        shell: powershell
+        run: |
+          if (-not (Test-Path .\bootstrap.exe)) { Write-Error 'bootstrap.exe not produced'; exit 1 }
+          Get-Item .\bootstrap.exe | Format-List Name,Length,LastWriteTime
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

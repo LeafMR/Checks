@@ -13,27 +13,56 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare PowerShellGet v2 and PSGallery
+      - name: Prepare package managers and PSGallery
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           $ProgressPreference = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+          $hasPSRes = Get-Command Install-PSResource -ErrorAction SilentlyContinue
+          if ($hasPSRes) {
+            try { Get-PSResourceRepository -Name PSGallery -ErrorAction Stop | Out-Null }
+            catch { Register-PSResourceRepository -PSGallery }
+            try { Set-PSResourceRepository -Name PSGallery -Trusted -ErrorAction Stop } catch {}
+          }
+
           if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue)) {
             Install-PackageProvider -Name NuGet -Force -Scope CurrentUser
           }
-          try { Get-PSRepository -Name PSGallery -ErrorAction Stop | Out-Null }
-          catch { Register-PSRepository -Default }
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module -Name PowerShellGet -RequiredVersion 2.2.5 -Scope CurrentUser -Force
-          Import-Module PowerShellGet -MinimumVersion 2.2.5 -Force
 
-      - name: Install ps2exe
+          try { Get-PSRepository -Name PSGallery -ErrorAction Stop | Out-Null }
+          catch {
+            $cfgDir  = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\PowerShell\PowerShellGet'
+            $cfgFile = Join-Path $cfgDir 'PSRepositories.xml'
+            if (Test-Path $cfgFile) { Remove-Item $cfgFile -Force }
+            Register-PSRepository -Default
+          }
+          try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch {}
+
+          try {
+            Install-Module -Name PowerShellGet -RequiredVersion 2.2.5 -Scope CurrentUser -Force
+            Import-Module  PowerShellGet -MinimumVersion 2.2.5 -Force
+          } catch {}
+
+      - name: Install ps2exe (prefer PSResourceGet)
         id: install_ps2exe
         continue-on-error: true
         shell: powershell
         run: |
-          Install-Module -Name ps2exe -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
-          Import-Module ps2exe -Force
+          $ErrorActionPreference = 'Stop'
+          $installed = $false
+          if (Get-Command Install-PSResource -ErrorAction SilentlyContinue) {
+            try {
+              Install-PSResource -Name ps2exe -Repository PSGallery -TrustRepository -Scope CurrentUser -Reinstall
+              Import-Module ps2exe -Force
+              $installed = $true
+            } catch {}
+          }
+          if (-not $installed) {
+            Install-Module -Name ps2exe -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
+            Import-Module ps2exe -Force
+          }
           Get-Module ps2exe | Format-List Name,Version,Path
 
       - name: Convert with ps2exe module
@@ -46,6 +75,7 @@ jobs:
         if: ${{ steps.install_ps2exe.outcome == 'failure' }}
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           $ProgressPreference = 'SilentlyContinue'
           $url = 'https://raw.githubusercontent.com/MScholtes/PS2EXE/master/ps2exe.ps1'
           Invoke-WebRequest -Uri $url -OutFile ps2exe.ps1

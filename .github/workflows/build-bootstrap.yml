@@ -13,14 +13,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install ps2exe
-        shell: pwsh
+      - name: Prepare PowerShellGet v2 and PSGallery
+        shell: powershell
         run: |
-          Install-Module -Name ps2exe -Scope CurrentUser -Force
-          Import-Module ps2exe
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -Force
+          }
+          $repo = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
+          if (-not $repo) {
+            Register-PSRepository -Name PSGallery -SourceLocation 'https://www.powershellgallery.com/api/v2' -InstallationPolicy Trusted
+          } else {
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          }
+          # Use PowerShellGet v2 for Install-Module semantics
+          Install-Module -Name PowerShellGet -RequiredVersion 2.2.5 -Scope CurrentUser -Force
+          Import-Module PowerShellGet -MinimumVersion 2.2.5 -Force
+
+      - name: Install ps2exe
+        shell: powershell
+        run: |
+          Install-Module -Name ps2exe -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
+          Import-Module ps2exe -Force
+          Get-Module ps2exe | Format-List Name,Version,Path
 
       - name: Convert bootstrap.ps1 -> bootstrap.exe
-        shell: pwsh
+        shell: powershell
         run: |
           Invoke-PS2EXE -InputFile .\bootstrap.ps1 -OutputFile .\bootstrap.exe
 

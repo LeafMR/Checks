@@ -13,16 +13,70 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Compile bootstrap.ps1 to EXE without PSGallery
+      # Prefer PSResourceGet (PowerShellGet v3) only. No PSGallery v2 calls.
+      - name: Install ps2exe via PSResourceGet
+        id: install_ps2exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+          if (-not (Get-Command Install-PSResource -ErrorAction SilentlyContinue)) {
+            throw "PSResourceGet not available"
+          }
+
+          try { Get-PSResourceRepository -Name PSGallery -ErrorAction Stop | Out-Null }
+          catch { Register-PSResourceRepository -PSGallery }
+
+          Set-PSResourceRepository -Name PSGallery -Trusted -ErrorAction SilentlyContinue
+
+          # Try ps2exe first, then ps2exe.core
+          $pkg = 'ps2exe'
+          if (-not (Find-PSResource -Name $pkg -Repository PSGallery -ErrorAction SilentlyContinue)) {
+            $pkg = 'ps2exe.core'
+          }
+
+          Install-PSResource -Name $pkg -Repository PSGallery -TrustRepository -Scope CurrentUser -Reinstall
+          Import-Module $pkg -Force
+          Get-Command Invoke-PS2EXE -ErrorAction Stop | Out-Null
+          Write-Host "Installed module: $pkg"
+
+      - name: Convert bootstrap.ps1 -> bootstrap.exe (module path)
+        if: ${{ steps.install_ps2exe.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          Invoke-PS2EXE -InputFile .\bootstrap.ps1 -OutputFile .\bootstrap.exe
+
+      # Raw-script fallback that tries multiple URLs and sets a UA header
+      - name: Fallback conversion without module
+        if: ${{ steps.install_ps2exe.outcome != 'success' }}
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $ProgressPreference = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          $url = 'https://raw.githubusercontent.com/MScholtes/PS2EXE/master/ps2exe.ps1'
-          Invoke-WebRequest -Uri $url -UseBasicParsing -OutFile ps2exe.ps1
-          if (-not (Test-Path .\bootstrap.ps1)) { Write-Error 'bootstrap.ps1 not found at repo root'; exit 1 }
+
+          $urls = @(
+            'https://raw.githubusercontent.com/MScholtes/PS2EXE/master/ps2exe.ps1',
+            'https://raw.githubusercontent.com/MScholtes/PS2EXE/main/ps2exe.ps1',
+            'https://raw.githubusercontent.com/MScholtes/PS2EXE/master/ps2exe.ps1.txt'
+          )
+
+          $downloaded = $false
+          foreach ($u in $urls) {
+            try {
+              Invoke-WebRequest -Uri $u -Headers @{ 'User-Agent'='CheckerBootstrap/CI' } -OutFile ps2exe.ps1 -TimeoutSec 60
+              if ((Test-Path .\ps2exe.ps1) -and ((Get-Item .\ps2exe.ps1).Length -gt 0)) { $downloaded = $true; break }
+            } catch {}
+          }
+          if (-not $downloaded) { throw "Failed to fetch ps2exe.ps1 from all candidates." }
+
           powershell -NoProfile -ExecutionPolicy Bypass -File .\ps2exe.ps1 -inputFile .\bootstrap.ps1 -outputFile .\bootstrap.exe
+
+      - name: Verify artifact
+        shell: powershell
+        run: |
           if (-not (Test-Path .\bootstrap.exe)) { Write-Error 'bootstrap.exe not produced'; exit 1 }
           Get-Item .\bootstrap.exe | Format-List Name,Length,LastWriteTime
 

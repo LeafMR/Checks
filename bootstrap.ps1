@@ -1,5 +1,6 @@
-$GithubChecksumUrl = "https://raw.githubusercontent.com/LeafMR/Checks/refs/heads/main/Checks.zip.sha256"
-$GithubAssetUrl = "https://raw.githubusercontent.com/LeafMR/Checks/refs/heads/main/Checks.zip"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$GithubChecksumUrl = "https://raw.githubusercontent.com/LeafMR/Checks/main/Checks.zip.sha256"
+$GithubAssetUrl = "https://raw.githubusercontent.com/LeafMR/Checks/main/Checks.zip"
 $ExpectedExecutableRelativePath = "checker.ps1"
 
 $AppFolder = Join-Path -Path $env:LOCALAPPDATA -ChildPath "CheckerBootstrap"
@@ -166,3 +167,4 @@ if ($code -ne 0) {
 
 Log "Bootstrap finished successfully."
 exit 0
+
